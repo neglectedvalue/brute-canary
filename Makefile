@@ -37,7 +37,7 @@ LDFLAGS=					\
 
 .PHONY: all clean # curve
 
-all: main
+all: src/main
 
 curve:
 	$(MAKE) RELEASE=1			\
@@ -53,21 +53,21 @@ CRYPTO_OBJS = $(CRYPTO_SRCS:%.c=%.o)
 $(CRYPTO_DIR)/src/%.o: $(CRYPTO_DIR)/src/%.c $(CRYPTO_HDRS)
 	$(CC) -std=c11 $(CFLAGS) -I$(CRYPTO_DIR)/include -o $@ -c $<
 
-crypto.a: $(CRYPTO_OBJS)
+src/crypto.a: $(CRYPTO_OBJS)
 	$(AR) cr $@ $^
 
-HDRS = $(wildcard *.hxx)
-SRCS = $(wildcard *.cxx)
+HDRS = $(wildcard src/*.hxx)
+SRCS = $(wildcard src/*.cxx)
 OBJS = $(SRCS:%.cxx=%.o)
 
-%.o: %.cxx $(HDRS)
+src/%.o: src/%.cxx $(HDRS)
 	$(CXX) -std=c++1z $(CFLAGS) $(CPPFLAGS)			\
 	       -pthread						\
 	       $(if $(filter 1 y yes, $(PROFILE)),-DPROFILE,)	\
 	       -o $@ -c $<
 
-main: $(OBJS) crypto.a
-	$(CXX) -pthread -lpthread $(LDFALGS) $^ -o main
+src/main: $(OBJS) src/crypto.a
+	$(CXX) -pthread -lpthread $(LDFALGS) $^ -o src/main
 
 clean:
-	-rm -f $(CRYPTO_OBJS) crypto.a $(OBJS) main
+	-rm -f $(CRYPTO_OBJS) src/crypto.a $(OBJS) src/main
