@@ -91,8 +91,6 @@ struct Hashing {
         std::chrono::steady_clock::duration curveTime{0};
     )
 
-    running_ = true;
-
     std::random_device rd;
     std::default_random_engine gen(rd());
     std::uniform_int_distribution<> dis(0, DictSize - 1);
@@ -176,8 +174,6 @@ struct Hashing {
  private:
   unsigned    nWords_;
   std::size_t tries_ = 0;
-
-  volatile bool running_ = false;
 };
 
 int main(int argc, char *argv[]) {
