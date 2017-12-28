@@ -2,6 +2,27 @@
 
 #include <gsl/gsl>
 
+// This graphics dramatically slows down my terminal, man. So it is disabled
+// for non-release builds.
+#if defined(NDEBUG)
+# define SMILE " 🌝 "
+#else
+# define SMILE " * "
+#endif
+
+#if defined(NDEBUG)
+# define SMITE " 🌚 "
+#else
+# define SMITE " o "
+#endif
+
+#if defined(PROFILE)
+# undef PROFILE
+# define PROFILE(...) __VA_ARGS__
+#else
+# define PROFILE(...)
+#endif
+
 static gsl::cstring_span<> const Whitespace = " ";
 
 static gsl::cstring_span<> const Words[] = {
@@ -296,5 +317,6 @@ static char const *Wallets[] = {
   "BURST-P7SA-89F9-62F4-53MEG	(entropy of 117.34 bits)",
   "BURST-6L9L-LULB-XVAZ-463RB	(entropy of 128 bits)"
 };
+static unsigned const nWallets = sizeof Wallets / sizeof Wallets[0];
 
 void Usage(char const *progname);

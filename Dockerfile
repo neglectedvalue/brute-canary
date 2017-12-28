@@ -33,6 +33,6 @@ ENV CPLUS_INCLUDE_PATH=/libs/include
 WORKDIR /usr/src
 ADD . /usr/src
 
-RUN make PROFILE=no RELEASE=yes main
+RUN make PROFILE=no RELEASE=yes all
 
-ENTRYPOINT ["/usr/src/main"]
+ENTRYPOINT ["/usr/src/src/main"]
