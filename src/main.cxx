@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -19,9 +20,15 @@
 // This graphics dramatically slows down my terminal, man. So it is disabled
 // for non-release builds.
 #if defined(NDEBUG)
-# define SMILE "🌝"
+# define SMILE " 🌝 "
 #else
 # define SMILE "-"
+#endif
+
+#if defined(NDEBUG)
+# define SMITE " 🌚 "
+#else
+# define SMITE "-"
 #endif
 
 #if defined(PROFILE)
@@ -69,37 +76,16 @@ std::string join(Iterable a, char const sep) {
 }
 
 struct Hashing {
-  Hashing(unsigned nWords, std::mutex &doneMutex, std::condition_variable &doneCondVar)
-      : nWords_(nWords), doneMutex_(doneMutex), doneCondVar_(doneCondVar)
+  Hashing(unsigned nWords)
+      : nWords_(nWords)
   {}
   Hashing(Hashing const &other) = delete;
   Hashing(Hashing&& other)
       : nWords_(other.nWords_), tries_(other.tries_)
-      , doneMutex_(other.doneMutex_), doneCondVar_(other.doneCondVar_)
   {}
-  ~Hashing() {
-    if (running_)
-      std::cout << "~Hashing()\n"; // << std::endl;
-  }
 
-  static void Cancel(void *self) {
-    std::cout << "Cancel(self=" << self << ")\n";
-    static_cast<Hashing *>(self)->Print();
-    pthread_exit(PTHREAD_CANCELED);
-  }
-
-  static void * Start(void *self) {
-    std::cout << "Start(self=" << self << ")\n";
-    static_cast<Hashing *>(self)->operator () ();
-    return nullptr;
-  }
-  
-  void Print() {
-    // if (running_)
-    std::cout << "Print()\n";
-  }
-
-  void operator () () {
+  void operator () (std::mutex &doneMutex, std::condition_variable &doneCondVar,
+                    std::atomic_bool &finished) {
     PROFILE(
         std::chrono::steady_clock::duration shaTime{0};
         std::chrono::steady_clock::duration curveTime{0};
@@ -107,58 +93,61 @@ struct Hashing {
 
     running_ = true;
 
-    std::random_device rd;  // will be used to obtain a seed for the random number engine
-    std::mt19937 gen(rd()); // standard mersenne_twister_engine seeded with rd()
+    std::random_device rd;
+    std::default_random_engine gen(rd());
     std::uniform_int_distribution<> dis(0, DictSize - 1);
     std::array<unsigned char, 32> secretKey;
     std::array<unsigned char, 32> publicKey;
     auto const &publicKeyReference = PublicKeys[nWords_ - 1];
     int wordIndices[nWords_];
+    bool hit = false;
 
     auto const startedAt = std::chrono::steady_clock::now();
 
-    pthread_cleanup_push(&Hashing::Cancel, this);
+    for (tries_ = 0; !finished.load(std::memory_order_relaxed); ) {
+      // Assuming checking the atomic bool costs a few iterations,
+      // let do them all first and then check the bool once.
+      // The value 128 here is just a guess.
+      for (unsigned hadmadeLoop = 0; hadmadeLoop < 128; ++hadmadeLoop, ++tries_) {
+        PROFILE(auto const shaAt = std::chrono::steady_clock::now());
+        picosha2::hash256_one_by_one hasher;
 
-    for (tries_ = 0; publicKey != publicKeyReference; pthread_testcancel(), ++tries_) {
-      PROFILE(
-          auto const shaAt = std::chrono::steady_clock::now();
-      )
-      picosha2::hash256_one_by_one hasher;
+        for (unsigned i = 0; i < 1; ++i) {
+          auto const wordIndex = dis(gen);
+          decltype(auto) word = Words[wordIndex];
+          wordIndices[i] = wordIndex;
 
-      for (unsigned i = 0; i < 1; ++i) {
-        auto const wordIndex = dis(gen);
-        decltype(auto) word = Words[wordIndex];
-        wordIndices[i] = wordIndex;
+          hasher.process(word.cbegin(), word.cend());
+        }
+        for (unsigned i = 1; i < nWords_; ++i) {
+          auto const wordIndex = dis(gen);
+          decltype(auto) word = Words[wordIndex];
+          wordIndices[i] = wordIndex;
 
-        hasher.process(word.cbegin(), word.cend());
+          hasher.process(Whitespace.cbegin(), Whitespace.cend());
+          hasher.process(word.cbegin(), word.cend());
+        }
+        hasher.finish();
+        hasher.get_hash_bytes(secretKey.begin(), secretKey.end());
+        PROFILE(shaTime += std::chrono::steady_clock::now() - shaAt);
+
+        PROFILE(auto const curveAt = std::chrono::steady_clock::now());
+        X25519_KeyGen_x64(publicKey.data(), secretKey.data());
+        PROFILE(curveTime += std::chrono::steady_clock::now() - curveAt);
+
+        if (publicKey == publicKeyReference) {
+          hit = true;
+          break;
+        }
       }
-      for (unsigned i = 1; i < nWords_; ++i) {
-        auto const wordIndex = dis(gen);
-        decltype(auto) word = Words[wordIndex];
-        wordIndices[i] = wordIndex;
 
-        hasher.process(Whitespace.cbegin(), Whitespace.cend());
-        hasher.process(word.cbegin(), word.cend());
+      if (hit) {
+        finished.store(true, std::memory_order_relaxed);
       }
-      hasher.finish();
-      hasher.get_hash_bytes(secretKey.begin(), secretKey.end());
-      PROFILE(
-          shaTime += std::chrono::steady_clock::now() - shaAt;
-      )
-
-      PROFILE(
-          auto const curveAt = std::chrono::steady_clock::now();
-      )
-      X25519_KeyGen_x64(publicKey.data(), secretKey.data());
-      PROFILE(
-          curveTime += std::chrono::steady_clock::now() - curveAt;
-      )
-    };
-
-    pthread_cleanup_pop(0);
+    }
 
     {
-      std::lock_guard<std::mutex> doneLock(doneMutex_);
+      std::lock_guard<std::mutex> doneLock(doneMutex);
       auto const elapsedTime = std::chrono::steady_clock::now() - startedAt;
       std::vector<std::string> passphraseWords;
       std::transform(&wordIndices[0], &wordIndices[0] + nWords_,
@@ -167,10 +156,13 @@ struct Hashing {
                        return gsl::to_string(Words[i]);
                      });
 
-      std::cout << SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE << '\n'
+      std::cout << (hit
+                    ? (SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE SMILE)
+                    : (SMITE SMITE SMITE SMITE SMITE SMITE SMITE SMITE SMITE SMITE))
+                << '\n'
                 << "took " << std::chrono::duration<double>(elapsedTime).count() << " s"
-          PROFILE(<< "\tsha256-ing  " << std::chrono::duration<double>(shaTime).count() << " s")
-          PROFILE(<< "\tcurve25519-ing  " << std::chrono::duration<double>(curveTime).count() << " s") << '\n'
+                PROFILE(<< "\tsha256-ing  "     << std::chrono::duration<double>(shaTime).count() << " s")
+                PROFILE(<< "\tcurve25519-ing  " << std::chrono::duration<double>(curveTime).count() << " s") << '\n'
                 << "speed " << static_cast<double>(tries_) / std::chrono::duration<double>(elapsedTime).count() << " guess/s per thread\n"
                 << "tries: "<< tries_ << '\n'
                 << "passphrase: " << join(std::begin(passphraseWords), std::end(passphraseWords), ' ') << '\n'
@@ -178,7 +170,7 @@ struct Hashing {
                 << "public key:           " << to_hexstring(publicKey) << '\n'
                 << "reference public key: " << to_hexstring(publicKeyReference) << '\n';
     }
-    doneCondVar_.notify_one();
+    doneCondVar.notify_one();
   }
 
  private:
@@ -186,9 +178,6 @@ struct Hashing {
   std::size_t tries_ = 0;
 
   volatile bool running_ = false;
-
-  std::mutex              &doneMutex_;
-  std::condition_variable &doneCondVar_;
 };
 
 int main(int argc, char *argv[]) {
@@ -211,18 +200,12 @@ int main(int argc, char *argv[]) {
 
   std::mutex doneMutex;
   std::condition_variable doneCondVar;
+  std::atomic_bool finished;
 
-  // std::forward_list<std::thread> threads;
-  // std::forward_list<std::thread::native_handle_type> nativeThreads;
-  std::forward_list<Hashing> hashers;
-  std::forward_list<pthread_t> nativeThreads;
+  std::forward_list<std::thread> threads;
   for (unsigned i = 0; i < nThreads; ++i) {
-    hashers.emplace_front(numOfWords, std::ref(doneMutex), std::ref(doneCondVar));
-    nativeThreads.emplace_front();
-    Hashing   *hasher = &hashers.front();
-    pthread_t *thr    = &nativeThreads.front();
-
-    pthread_create(thr, nullptr, &Hashing::Start, hasher);
+    threads.emplace_front(Hashing(numOfWords), std::ref(doneMutex), std::ref(doneCondVar),
+                          std::ref(finished));
 
     // Hashing hasher((numOfWords), std::ref(doneMutex), std::ref(doneCondVar));
     // nativeThreads.push_front(thread.native_handle());
@@ -235,27 +218,12 @@ int main(int argc, char *argv[]) {
   {
     std::unique_lock<std::mutex> doneLock(doneMutex);
     doneCondVar.wait(doneLock);
+    finished = true;
   }
-  // for (auto &thread : threads) {
-  //   // lk.unlock();
-  //   // doneCondVar.notify_one()
+  for (auto &thread : threads) {
 
-  //   if (thread.joinable()) {
-  //     // thread.std::thread::~thread();
-  //     // thread.join();
-  //     thread.detach();
-  //   }
-  // }
-  for (auto &thr : nativeThreads) {
-    if (int s = pthread_cancel(thr); s != 0) {
-      std::cout << "pthread_cancel failed (thr " << thr << "): " << s << '\n';
-    }
-    
-    void *res;
-    if (int s = pthread_join(thr, &res); s != 0) {
-      std::cout << "pthread_join failed (thr " << thr << "): " << s << " (void*)" << res << '\n';
-    } else if (s == 0 && res == PTHREAD_CANCELED) {
-      std::cout << "thread (thr " << thr << ") has been cancelled successfully\n";
+    if (thread.joinable()) {
+      thread.join();
     }
   }
 

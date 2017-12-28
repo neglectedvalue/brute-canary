@@ -1,4 +1,4 @@
-ifeq ($(GCC7),1)
+ifneq ($(filter 1 y yes, $(GCC7)),)
 GCC_DIR=/usr/local/Cellar/gcc/7.2.0
 # AR=$(GCC_DIR)/bin/gcc-ar-7
 CC=$(GCC_DIR)/bin/gcc-7
@@ -67,7 +67,7 @@ src/%.o: src/%.cxx $(HDRS)
 	       -o $@ -c $<
 
 src/main: $(OBJS) src/crypto.a
-	$(CXX) -pthread -lpthread $(LDFALGS) $^ -o src/main
+	$(CXX) -pthread -lpthread $(LDFALGS) $^ -o $@
 
 clean:
 	-rm -f $(CRYPTO_OBJS) src/crypto.a $(OBJS) src/main
